@@ -2,6 +2,7 @@
 # -*- coding: utf-8 -*-
 
 import os, sys, time
+import json, yaml
 # import smbus2 to crotrol i2c
 from smbus2 import SMBus
 # import SSD1306 library for oled control
@@ -18,66 +19,64 @@ class i2c_control():
         #see i2c device: $ sudo i2cdetect -y -a 1
         self.i2c=SMBus(1) # device in 1st I2C module
         self.i2c_addr=0x0d
-        self.i2c_table={'rgb_bright':{
-                            'reg_rgb_control': 0x00, # (1st, 2nd, 3th, all): (0x00, 0x01, 0x02, 0xFF)
-                            'reg_rgb_R': 0x01, # R value(0x00-0xFF)
-                            'reg_rgb_G': 0x02, # G value(0x00-0xFF)
-                            'reg_rgb_B': 0x03}, # B value(0x00-0xFF)
-                        'rgb_animate':{
-                            'reg_rgb_mode': 0x04,
-                            'reg_rgb_speed': 0x05,
-                            'reg_rgb_color': 0x06,
-                            'reg_rgb_close': 0x07},
-                        'fan_control':{
-                            'reg_fan_speed': 0x08}
-                       }
+        # use json or yaml to load config
+        #with open('config.json', 'r') as f:
+        #   self.i2c_table=json.load(f, encoding='utf-8')
+        config_file=os.path.join(os.path.split(__file__)[0], 'config.yaml')
+        with open(config_file, 'r') as f:
+            self.i2c_table=yaml.load(f, Loader=yaml.FullLoader)
 
         self.rgb_close()
-        self.fan_speed_switch(0)
+        self.fan_speed_switch('close')
         for i in range(3):
-            self.rgb_simple_control(0xFF, [0xFF, 0xFF, 0xFF])
+            self.rgb_simple_control('All', [0xFF, 0xFF, 0xFF])
             self.rgb_close()
         time.sleep(2)
-        self.fan_speed_switch(1)
-        #self.rgb_animate(0x01, 0x01, 0x06)
-        #for i in range(7):
-        #    self.rgb_animate(0x01, 0x02, i)
-        #    time.sleep(3)
+        self.fan_speed_switch('fullspeed')
+        #self.rgb_animate('breathing', 'slow', 'white')
 
-    def rgb_simple_control(self, rgb_index, rgb_list):
+    def i2c_close(self):
+        self.i2c.close()
+
+    def rgb_simple_control(self, rgb_control, rgb_list):
         i2c=self.i2c
         i2c_addr=self.i2c_addr
-        req_table=self.i2c_table['rgb_bright']
-        val_table=[('reg_rgb_control', rgb_index),
-                   ('reg_rgb_R', rgb_list[0]), ('reg_rgb_G', rgb_list[1]), ('reg_rgb_B', rgb_list[2])]
-        for key, value in val_table:
-            i2c.write_byte_data(i2c_addr, req_table[key], value)
+        # (1st, 2nd, 3th, all): (0x00, 0x01, 0x02, 0xFF)
+        # RGB value(0x00-0xFF)
+        table=self.i2c_table['rgb_bright']
+        RGB_value={'rgb_R': rgb_list[0], 'rgb_G': rgb_list[1], 'rgb_B': rgb_list[2]}
+        for key, value in table.items():
+            if key=='rgb_control':
+                i2c.write_byte_data(i2c_addr, table[key]['reg'], table[key]['value'][rgb_control])
+            else:
+                i2c.write_byte_data(i2c_addr, table[key]['reg'], RGB_value[key])
             time.sleep(.2)
         time.sleep(.3)
 
     def rgb_animate(self, rgb_mode, rgb_speed, rgb_color):
         i2c=self.i2c
         i2c_addr=self.i2c_addr
-        req_table=self.i2c_table['rgb_animate']
-        i2c.write_byte_data(i2c_addr, int('{reg_rgb_mode}'.format(**req_table)), rgb_mode)
-        i2c.write_byte_data(i2c_addr, int('{reg_rgb_speed}'.format(**req_table)), rgb_speed)
-        if rgb_mode==0x00 or rgb_mode==0x01:
-            i2c.write_byte_data(i2c_addr, int('{reg_rgb_color}'.format(**req_table)), rgb_color)
+        table=self.i2c_table['rgb_animate']
+        print(table)
+        i2c.write_byte_data(i2c_addr, table['rgb_mode']['reg'], table['rgb_mode']['value'][rgb_mode])
+        i2c.write_byte_data(i2c_addr, table['rgb_speed']['reg'], table['rgb_speed']['value'][rgb_speed])
+        if rgb_mode=='running' or rgb_mode=='breathing':
+            i2c.write_byte_data(i2c_addr, table['rgb_color']['reg'], table['rgb_color']['value'][rgb_color])
         time.sleep(.3)
 
     def rgb_close(self):
         i2c=self.i2c
         i2c_addr=self.i2c_addr
-        req_table=self.i2c_table['rgb_animate']
-        i2c.write_byte_data(i2c_addr, int('{reg_rgb_close}'.format(**req_table)), 0x00)
+        table=self.i2c_table['rgb_animate']
+        i2c.write_byte_data(i2c_addr, table['rgb_close']['reg'], table['rgb_close']['value']['close'])
         time.sleep(.3)
 
     def fan_speed_switch(self, sw):
         i2c=self.i2c
         i2c_addr=self.i2c_addr
-        req_table=self.i2c_table['fan_control']
+        table=self.i2c_table['fan_control']
         # sw: [0x00~0x09], ex: 0x00=close, 0x01=full speed, 0x02=20% speed
-        i2c.write_byte_data(i2c_addr, int('{reg_fan_speed}'.format(**req_table)), sw)
+        i2c.write_byte_data(i2c_addr, table['fan_speed']['reg'], table['fan_speed']['value'][sw])
         time.sleep(1)
 
 class oled_control():
@@ -146,10 +145,11 @@ class oled_control():
 
 if __name__ == '__main__':
     '''sample for oled control and use 'draw_4line_string' function'''
-    #oled=oled_control()
-    #strlist=['abcde', '12345', 'hello word', 'by luke']
-    #oled.draw_4line_string(strlist)
-    #oled.output_disp()
+    oled=oled_control()
+    strlist=['Hello world!!', 'draw oled test', 'enjoy your life', 'coding by luke']
+    oled.draw_4line_string(strlist)
+    oled.output_disp()
 
     '''sample for rgb control'''
-    man=i2c_control()
+    i2c_control=i2c_control()
+    i2c_control.i2c_close()
