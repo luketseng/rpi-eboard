@@ -1,0 +1,73 @@
+{
+    "rgb_bright": {
+        "rgb_control": {
+            "reg": 0,
+            "value": {
+                "All": 255,
+                "rgb1": 0,
+                "rgb2": 1,
+                "rgb3": 2
+            }
+        },
+        "rgb_R": {
+            "reg": 1,
+            "value": 0
+        },
+        "rgb_G": {
+            "reg": 2,
+            "value": 0
+        },
+        "rgb_B": {
+            "reg": 3,
+            "value": 0
+        }
+    },
+    "rgb_animate": {
+        "reg_rgb_mode": {
+            "reg": 4,
+            "value": {
+                "running": 0,
+                "breathing": 1,
+                "scroll": 2,
+                "rainbow": 3,
+                "colorful": 4
+            }
+        },
+        "rgb_speed": {
+            "reg": 5,
+            "value": {
+                "slow": 1,
+                "medium": 2,
+                "high": 3
+            }
+        },
+        "rgb_color": {
+            "reg": 6,
+            "value": {
+                "red": 0,
+                "green": 1,
+                "blue": 2,
+                "yellow": 3,
+                "purple": 4,
+                "cyan": 5,
+                "white": 6
+            }
+        },
+        "rgb_close": {
+            "reg": 7,
+            "value": {
+                "close": 0
+            }
+        }
+    },
+    "fan_control": {
+        "fan_speed": {
+            "reg": 8,
+            "value": {
+                "close": 0,
+                "fullspeed": 1,
+                "halfspeed": 5
+            }
+        }
+    }
+}
