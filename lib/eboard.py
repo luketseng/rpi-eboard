@@ -145,10 +145,11 @@ class oled_control():
 
 if __name__ == '__main__':
     '''sample for oled control and use 'draw_4line_string' function'''
-    oled = oled_control()
-    strlist = ['Hello world!!', 'draw oled test', 'enjoy your life', 'coding by luke']
-    oled.draw_4line_string(strlist)
-    oled.output_disp()
+    #oled = oled_control()
+    #strlist = ['Hello world!!', 'draw oled test', 'enjoy your life', 'coding by luke']
+    #oled.draw_4line_string(strlist)
+    #oled.output_disp()
     '''sample for rgb control'''
     i2c_control = i2c_control()
-    i2c_control.i2c_close()
+    #i2c_control.i2c_close()
+    #i2c_control.fan_speed_switch('fullspeed')

@@ -5,7 +5,9 @@ import os, sys, time
 import psutil
 import socket
 import fcntl
+#import netifaces as ni
 import struct
+import subprocess
 from lib.eboard import i2c_control, oled_control
 from datetime import datetime
 
@@ -63,6 +65,9 @@ def getDiskSpace():
 # Return information about ip address
 # get_ip_address('eth0')
 def get_ip_address(ifname):
+    #ip = ni.ifaddresses(ifname)[ni.AF_INET][0]['addr']
+    #print(ip)
+    #return ip
     s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     return socket.inet_ntoa(
         fcntl.ioctl(
@@ -72,6 +77,7 @@ def get_ip_address(ifname):
 
 def adjust_rgb(cpu_temp):
     # temp control rgb
+    level_temp = 0
     if abs(int(cpu_temp) - level_temp) > 0:
         if cpu_temp <= 40:
             level_temp = 40
@@ -89,39 +95,58 @@ def stdout_flush(string_list, delay=1):
         sys.stdout.flush()  # '\t' can't flush()
         time.sleep(delay)
 
+def loop_check():
+    global fan_flag
+    # CPU informatiom
+    cpu_usage = getCPUuse()
+    cpu_temp = getCPUtemperature()
+
+    # RAM information
+    ram_stats = getRAMinfo()
+
+    # Disk information
+    disk_stats = getDiskSpace()
+
+    cpu_info_string = "CPU:{:<4.1f}%  T:{:.2f}{}C".format(cpu_usage, cpu_temp, chr(0xB0))
+    ram_info_string = "Mem:{:.0f}/{:.0f}M {:.1f}%".format(*ram_stats)
+    disk_info_string = "Disk:{}/{} {}".format(*disk_stats)
+    ip_addr_string = "eth0:{}".format(get_ip_address('eth0'))
+    str_list = (cpu_info_string, ram_info_string, disk_info_string, ip_addr_string)
+    #stdout_flush(str_list)
+
+    oled.draw_4line_string(str_list)
+    oled.output_disp()
+    #adjust_rgb(cpu_temp)
+    time.sleep(5)
+
+    if datetime.now().time().hour > 9 and datetime.now().time().hour < 20 and not fan_flag:
+        i2c_control.fan_speed_switch('fullspeed')
+        fan_flag = True
+    if (datetime.now().time().hour <= 9 and fan_flag) or (datetime.now().time().hour >= 20 and fan_flag):
+        i2c_control.fan_speed_switch('close')
+        fan_flag = False
+
+def process_check():
+    count=0
+    process = subprocess.Popen("ps aux | grep rpi_stats", shell=True, stdout=subprocess.PIPE)
+    stdout_list = process.communicate()[0].split('\n')
+    for s in stdout_list:
+        if "/home/luke/rpi_stats.py" in s:
+            count+=1
+    print(count)
+    if count > 2:
+        return True
+    return False
+
 if __name__ == '__main__':
-    global oled, i2c_control, level_temp
+    if process_check():
+        print('process exist')
+        exit()
+
+    global oled, i2c_control
     oled = oled_control()
     i2c_control = i2c_control()
     fan_flag = True
-    level_temp = 0
 
     while True:
-        # CPU informatiom
-        cpu_usage = getCPUuse()
-        cpu_temp = getCPUtemperature()
-
-        # RAM information
-        ram_stats = getRAMinfo()
-
-        # Disk information
-        disk_stats = getDiskSpace()
-
-        cpu_info_string = "CPU:{:<4.1f}%  T:{:.2f}{}C".format(cpu_usage, cpu_temp, chr(0xB0))
-        ram_info_string = "Mem:{:.0f}/{:.0f}M {:.1f}%".format(*ram_stats)
-        disk_info_string = "Disk:{}/{} {}".format(*disk_stats)
-        ip_addr_string = "eth0:{}".format(get_ip_address('eth0'))
-        str_list = (cpu_info_string, ram_info_string, disk_info_string, ip_addr_string)
-        #stdout_flush(str_list)
-
-        oled.draw_4line_string(str_list)
-        oled.output_disp()
-        #adjust_rgb(cpu_temp)
-        time.sleep(3)
-
-        if datetime.now().time().hour > 9 and datetime.now().time().hour < 20 and not fan_flag:
-            i2c_control.fan_speed_switch('fullspeed')
-            fan_flag = True
-        if datetime.now().time().hour >= 20 and fan_flag:
-            i2c_control.fan_speed_switch('close')
-            fan_flag = False
+       loop_check()
