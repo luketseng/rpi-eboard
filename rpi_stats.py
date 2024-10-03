@@ -119,12 +119,15 @@ def loop_check():
     #adjust_rgb(cpu_temp)
     time.sleep(5)
 
-    if datetime.now().time().hour > 9 and datetime.now().time().hour < 20 and not fan_flag:
-        i2c_control.fan_speed_switch('fullspeed')
-        fan_flag = True
-    if (datetime.now().time().hour <= 9 and fan_flag) or (datetime.now().time().hour >= 20 and fan_flag):
-        i2c_control.fan_speed_switch('close')
-        fan_flag = False
+    if fan_flag:
+        if (datetime.now().time().hour <= 15 and fan_flag) or (datetime.now().time().hour >= 16):
+            i2c_control.fan_speed_switch('close')
+            fan_flag = False
+    else:
+        if datetime.now().time().hour > 15 and datetime.now().time().hour < 16:
+            i2c_control.fan_speed_switch('fullspeed')
+            #i2c_control.fan_speed_switch('halfspeed')
+            fan_flag = True
 
 def process_check():
     count=0
@@ -133,7 +136,7 @@ def process_check():
     for s in stdout_list:
         if "/home/luke/rpi_stats.py" in s:
             count+=1
-    print(count)
+    print("process_check", count)
     if count > 2:
         return True
     return False
@@ -147,6 +150,9 @@ if __name__ == '__main__':
     oled = oled_control()
     i2c_control = i2c_control()
     fan_flag = True
+    #i2c_control.fan_speed_switch('close')
+    #i2c_control.fan_speed_switch('halfspeed')
+    #exit()
 
     while True:
        loop_check()
