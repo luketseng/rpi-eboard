@@ -3,11 +3,49 @@
 
 import os, sys, time
 import json, yaml
+
 # import smbus2 to crotrol i2c
-from smbus2 import SMBus
-# import SSD1306 library for oled control
-import Adafruit_SSD1306
+try:
+    from smbus2 import SMBus
+except ImportError:
+    SMBus = None
 from PIL import Image, ImageDraw, ImageFont
+
+try:
+    # import SSD1306 library for oled control
+    import Adafruit_SSD1306
+    import RPi.GPIO as GPIO
+    from Adafruit_GPIO.GPIO import RPiGPIOAdapter
+except ImportError:
+    Adafruit_SSD1306 = None
+    GPIO = None
+    RPiGPIOAdapter = None
+
+try:
+    import board
+    import busio
+    import adafruit_ssd1306
+except ImportError:
+    board = None
+    busio = None
+    adafruit_ssd1306 = None
+
+
+class _NullOLEDDisplay:
+    def __init__(self, width, height):
+        self.width = width
+        self.height = height
+        self.last_image = None
+
+    def clear(self):
+        return None
+
+    def display(self):
+        return None
+
+    def image(self, image):
+        self.last_image = image
+        return None
 
 class i2c_control():
     '''init logging'''
@@ -15,7 +53,9 @@ class i2c_control():
     i2c_addr = None
     i2c = None
 
-    def __init__(self):
+    def __init__(self, run_self_test=False):
+        if SMBus is None:
+            raise ImportError("smbus2 is unavailable; i2c_control cannot start")
         #see i2c device: $ sudo i2cdetect -y -a 1
         self.i2c = SMBus(1)  # device in 1st I2C module
         self.i2c_addr = 0x0d
@@ -26,14 +66,15 @@ class i2c_control():
         with open(config_file, 'r') as f:
             self.i2c_table = yaml.load(f, Loader=yaml.FullLoader)
 
-        self.rgb_close()
-        self.fan_speed_switch('close')
-        for i in range(3):
-            self.rgb_simple_control('All', [0xFF, 0xFF, 0xFF])
+        if run_self_test:
             self.rgb_close()
-        time.sleep(2)
-        self.fan_speed_switch('fullspeed')
-        #self.rgb_animate('breathing', 'slow', 'white')
+            self.fan_speed_switch('close')
+            for i in range(3):
+                self.rgb_simple_control('All', [0xFF, 0xFF, 0xFF])
+                self.rgb_close()
+            time.sleep(2)
+            self.fan_speed_switch('fullspeed')
+            #self.rgb_animate('breathing', 'slow', 'white')
 
     def i2c_close(self):
         self.i2c.close()
@@ -47,28 +88,64 @@ class i2c_control():
         RGB_value = {'rgb_R': rgb_list[0], 'rgb_G': rgb_list[1], 'rgb_B': rgb_list[2]}
         for key, value in table.items():
             if key == 'rgb_control':
-                i2c.write_byte_data(i2c_addr, table[key]['reg'], table[key]['value'][rgb_control])
+                _write_byte_with_retry(
+                    i2c,
+                    i2c_addr,
+                    table[key]['reg'],
+                    table[key]['value'][rgb_control],
+                    f"rgb_control={rgb_control}",
+                )
             else:
-                i2c.write_byte_data(i2c_addr, table[key]['reg'], RGB_value[key])
-            time.sleep(.2)
-        time.sleep(.3)
+                _write_byte_with_retry(
+                    i2c,
+                    i2c_addr,
+                    table[key]['reg'],
+                    RGB_value[key],
+                    key,
+                )
+            time.sleep(.15)
+        time.sleep(.25)
 
     def rgb_animate(self, rgb_mode, rgb_speed, rgb_color):
         i2c = self.i2c
         i2c_addr = self.i2c_addr
         table = self.i2c_table['rgb_animate']
         print(table)
-        i2c.write_byte_data(i2c_addr, table['rgb_mode']['reg'], table['rgb_mode']['value'][rgb_mode])
-        i2c.write_byte_data(i2c_addr, table['rgb_speed']['reg'], table['rgb_speed']['value'][rgb_speed])
+        _write_byte_with_retry(
+            i2c,
+            i2c_addr,
+            table['rgb_mode']['reg'],
+            table['rgb_mode']['value'][rgb_mode],
+            f"rgb_mode={rgb_mode}",
+        )
+        _write_byte_with_retry(
+            i2c,
+            i2c_addr,
+            table['rgb_speed']['reg'],
+            table['rgb_speed']['value'][rgb_speed],
+            f"rgb_speed={rgb_speed}",
+        )
         if rgb_mode == 'running' or rgb_mode == 'breathing':
-            i2c.write_byte_data(i2c_addr, table['rgb_color']['reg'], table['rgb_color']['value'][rgb_color])
+            _write_byte_with_retry(
+                i2c,
+                i2c_addr,
+                table['rgb_color']['reg'],
+                table['rgb_color']['value'][rgb_color],
+                f"rgb_color={rgb_color}",
+            )
         time.sleep(.3)
 
     def rgb_close(self):
         i2c = self.i2c
         i2c_addr = self.i2c_addr
         table = self.i2c_table['rgb_animate']
-        i2c.write_byte_data(i2c_addr, table['rgb_close']['reg'], table['rgb_close']['value']['close'])
+        _write_byte_with_retry(
+            i2c,
+            i2c_addr,
+            table['rgb_close']['reg'],
+            table['rgb_close']['value']['close'],
+            "rgb_close",
+        )
         time.sleep(.3)
 
     def fan_speed_switch(self, sw):
@@ -76,7 +153,13 @@ class i2c_control():
         i2c_addr = self.i2c_addr
         table = self.i2c_table['fan_control']
         # sw: [0x00~0x09], ex: 0x00=close, 0x01=full speed, 0x02=20% speed
-        i2c.write_byte_data(i2c_addr, table['fan_speed']['reg'], table['fan_speed']['value'][sw])
+        _write_byte_with_retry(
+            i2c,
+            i2c_addr,
+            table['fan_speed']['reg'],
+            table['fan_speed']['value'][sw],
+            f"fan_speed={sw}",
+        )
         time.sleep(1)
 
 class oled_control():
@@ -91,20 +174,57 @@ class oled_control():
 
     def __init__(self):
         self.i2c_addr = 0x3c
+        self._dummy = False
+        self._backend = None
         RST = None  # on the PiOLED this pin isnt used
-        # 128x32 display with hardware I2C:
-        self.disp = Adafruit_SSD1306.SSD1306_128_32(rst=RST, i2c_address=self.i2c_addr)
-        # Initialize library.
-        self.disp.begin()
-        self.clear_disp()
+        self.width = 128
+        self.height = 32
 
-        # Create blank image for drawing.
-        # Make sure to create image with mode '1' for 1-bit color.
-        self.width = self.disp.width
-        self.height = self.disp.height
-        self.draw_init()
+        try:
+            if Adafruit_SSD1306 is not None and GPIO is not None and RPiGPIOAdapter is not None:
+                # 128x32 display with the legacy Adafruit driver stack.
+                self.disp = Adafruit_SSD1306.SSD1306_128_32(
+                    rst=RST,
+                    i2c_address=self.i2c_addr,
+                    i2c_bus=1,
+                    gpio=RPiGPIOAdapter(GPIO),
+                )
+                self.disp.begin()
+                self._backend = "legacy"
+            elif board is not None and busio is not None and adafruit_ssd1306 is not None:
+                # 128x32 display with the modern CircuitPython driver stack.
+                i2c = busio.I2C(board.SCL, board.SDA)
+                self.disp = adafruit_ssd1306.SSD1306_I2C(
+                    self.width,
+                    self.height,
+                    i2c,
+                    addr=self.i2c_addr,
+                )
+                self._backend = "circuitpython"
+            else:
+                raise ImportError("OLED hardware libraries are unavailable")
+
+            self.width = self.disp.width
+            self.height = self.disp.height
+            self.image = Image.new('1', (self.width, self.height))
+            self.draw = ImageDraw.Draw(self.image)
+            self.clear_disp()
+            self.draw_init()
+        except (ImportError, OSError, PermissionError) as exc:
+            self._dummy = True
+            self.disp = _NullOLEDDisplay(self.width, self.height)
+            self.image = Image.new('1', (self.width, self.height))
+            self.draw = ImageDraw.Draw(self.image)
+            print(
+                "[oled_control] hardware OLED unavailable, using dummy display: "
+                f"{exc}. Install `adafruit-blinka` + `adafruit-circuitpython-ssd1306` "
+                "for the modern stack, or `Adafruit-SSD1306` for the legacy stack.",
+                file=sys.stderr,
+            )
 
     def draw_init(self):
+        if self._dummy:
+            return
         self.image = Image.new('1', (self.width, self.height))
         # Get drawing object to draw on image.
         self.draw = ImageDraw.Draw(self.image)
@@ -117,14 +237,25 @@ class oled_control():
             time.sleep(1)
 
     def clear_disp(self):
+        if self._dummy:
+            return
         # Clear display.
-        self.disp.clear()
-        self.disp.display()
+        if self._backend == "legacy":
+            self.disp.clear()
+            self.disp.display()
+        else:
+            self.disp.fill(0)
+            self.disp.show()
 
     def output_disp(self):
         '''Display image.'''
+        if self._dummy:
+            return
         self.disp.image(self.image)
-        self.disp.display()
+        if self._backend == "legacy":
+            self.disp.display()
+        else:
+            self.disp.show()
 
     def draw_4line_string(self, str_list):
         # First define some constants to allow easy resizing of shapes.
@@ -142,6 +273,22 @@ class oled_control():
         # Write two lines of text.
         for i, diff in enumerate(range(0, 32, 8)):
             self.draw.text((x, top + diff), str_list[i], font=font, fill=255)
+
+
+def _write_byte_with_retry(i2c, addr, reg, value, label, retries=3, delay=0.08):
+    last_exc = None
+    for attempt in range(retries):
+        try:
+            i2c.write_byte_data(addr, reg, value)
+            return
+        except OSError as exc:
+            last_exc = exc
+            if attempt + 1 < retries:
+                time.sleep(delay * (attempt + 1))
+                continue
+            raise OSError(
+                f"I2C write failed for {label} (addr=0x{addr:02x}, reg=0x{reg:02x}, value=0x{value:02x})"
+            ) from last_exc
 
 if __name__ == '__main__':
     '''sample for oled control and use 'draw_4line_string' function'''

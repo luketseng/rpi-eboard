@@ -26,7 +26,7 @@ table = {
             'reg': 0x03,
             'value': 0x00}},
     'rgb_animate': {
-        'reg_rgb_mode': {
+        'rgb_mode': {
             'reg': 0x04,
             'value': {
                 'running': 0x00,

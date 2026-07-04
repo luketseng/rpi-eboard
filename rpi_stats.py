@@ -1,158 +1,148 @@
-#!/usr/bin/python
+#!/usr/bin/python3
 # -*- coding: utf-8 -*-
 
-import os, sys, time
-import psutil
+import os
 import socket
-import fcntl
-#import netifaces as ni
-import struct
-import subprocess
+import time
+
+import psutil
+
 from lib.eboard import i2c_control, oled_control
-from datetime import datetime
 
-# Return % of CPU used by user as a character string
-def getCPUuse():
+
+LOOP_INTERVAL = 5
+HARDWARE_DELAY = 1.0
+TEMP_CLOSE = 45.0
+TEMP_HALF = 58.0
+ETH_IFACE = os.environ.get("ETH_IFACE", "eth0")
+WLAN_IFACE = os.environ.get("WLAN_IFACE", "wlan0")
+
+
+def get_cpu_usage():
     return psutil.cpu_percent(interval=0.5)
-    #return(str(os.popen("top -n1 | awk '/Cpu\(s\):/ {print $2}'").readline().strip())[:3])
 
-# Return CPU temperature as a character string
-def getCPUtemperature():
+
+def get_cpu_temperature():
+    temps = psutil.sensors_temperatures(fahrenheit=False)
+    for sensor_name in ("cpu_thermal", "coretemp", "soc_thermal"):
+        entries = temps.get(sensor_name)
+        if entries:
+            for entry in entries:
+                if entry.current is not None:
+                    return float(entry.current)
+
     temp_path = "/sys/class/thermal/thermal_zone0/temp"
-    cmd = 'cat {}'.format(temp_path)
-    res = os.popen(cmd).readline()
-    temp = int(res) / 1000.0
-    return temp
-    # cmd: vcgencmd measure_temp
+    try:
+        with open(temp_path, "r", encoding="utf-8") as handle:
+            return int(handle.read().strip()) / 1000.0
+    except (OSError, ValueError):
+        return None
 
-# Return RAM information (unit=kb) in a list
-# Index 0: total RAM
-# Index 1: used RAM
-# Index 2: free RAM
-def getRAMinfo():
-    cmd = 'free'
-    p = os.popen(cmd)
-    i = 0
-    while 1:
-        i = i + 1
-        line = p.readline()
-        if i == 2:
-            ram_stats = line.split()[1:4]
-            ram_total = round(float(ram_stats[0]) / 1024, 3)
-            ram_used = round(float(ram_stats[1]) / 1024, 3)
-            ram_free = round(float(ram_stats[2]) / 1024, 3)
-            return (ram_free, ram_total, ram_free * 100 / ram_total)
 
-# Return information about disk space as a list (unit included)
-# Output is in kb, here I convert it in Mb for readability
-# Index 0: total disk space
-# Index 1: used disk space
-# Index 2: remaining disk space
-# Index 3: percentage of disk used
-def getDiskSpace():
-    p = os.popen("df -h /")
-    i = 0
-    while 1:
-        i = i + 1
-        line = p.readline()
-        if i == 2:
-            disk_stats = line.split()[1:5]
-            disk_total = disk_stats[0]
-            disk_used = disk_stats[1]
-            disk_perc = disk_stats[3]
-            return (disk_used, disk_total, disk_perc)
+def get_ram_info():
+    mem = psutil.virtual_memory()
+    return mem.percent
 
-# Return information about ip address
-# get_ip_address('eth0')
-def get_ip_address(ifname):
-    #ip = ni.ifaddresses(ifname)[ni.AF_INET][0]['addr']
-    #print(ip)
-    #return ip
-    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    return socket.inet_ntoa(
-        fcntl.ioctl(
-            s.fileno(),
-            0x8915,  # SIOCGIFADDR
-            struct.pack('256s', ifname[:15]))[20:24])
 
-def adjust_rgb(cpu_temp):
-    # temp control rgb
-    level_temp = 0
-    if abs(int(cpu_temp) - level_temp) > 0:
-        if cpu_temp <= 40:
-            level_temp = 40
-            i2c_control.rgb_animate(0x01, 0x01, 0x06)
-        elif cpu_temp <= 45:
-            level_temp = 45
-            i2c_control.rgb_animate(0x01, 0x02, 0x03)
-        elif cpu_temp <= 50:
-            level_temp = 50
-            i2c_control.rgb_animate(0x01, 0x03, 0x00)
+def get_interface_ip(ifname):
+    addrs = psutil.net_if_addrs().get(ifname, [])
+    for addr in addrs:
+        if addr.family == socket.AF_INET:
+            return addr.address
+    return "-"
 
-def stdout_flush(string_list, delay=1):
-    for i in string_list:
-        sys.stdout.write("\r{:40}".format(i))
-        sys.stdout.flush()  # '\t' can't flush()
-        time.sleep(delay)
 
-def loop_check():
-    global fan_flag
-    # CPU informatiom
-    cpu_usage = getCPUuse()
-    cpu_temp = getCPUtemperature()
+def select_fan_speed(cpu_temp):
+    if cpu_temp is None:
+        return "fullspeed"
+    if cpu_temp < TEMP_CLOSE:
+        return "close"
+    if cpu_temp < TEMP_HALF:
+        return "halfspeed"
+    return "fullspeed"
 
-    # RAM information
-    ram_stats = getRAMinfo()
 
-    # Disk information
-    disk_stats = getDiskSpace()
+def fan_state_label(fan_state):
+    return {
+        "close": "off",
+        "halfspeed": "half",
+        "fullspeed": "full",
+    }.get(fan_state, "unk")
 
-    cpu_info_string = "CPU:{:<4.1f}%  T:{:.2f}{}C".format(cpu_usage, cpu_temp, chr(0xB0))
-    ram_info_string = "Mem:{:.0f}/{:.0f}M {:.1f}%".format(*ram_stats)
-    disk_info_string = "Disk:{}/{} {}".format(*disk_stats)
-    ip_addr_string = "eth0:{}".format(get_ip_address('eth0'))
-    str_list = (cpu_info_string, ram_info_string, disk_info_string, ip_addr_string)
-    #stdout_flush(str_list)
 
-    oled.draw_4line_string(str_list)
-    oled.output_disp()
-    #adjust_rgb(cpu_temp)
-    time.sleep(5)
+def format_line(label, value, width=20):
+    text = f"{label}{value}"
+    if len(text) <= width:
+        return text
+    return text[: width - 3] + "..."
 
-    if fan_flag:
-        if (datetime.now().time().hour <= 15 and fan_flag) or (datetime.now().time().hour >= 16):
-            i2c_control.fan_speed_switch('close')
-            fan_flag = False
+
+def build_display_lines(cpu_usage, cpu_temp, fan_state):
+    ram_percent = get_ram_info()
+    eth0_ip = get_interface_ip(ETH_IFACE)
+    wlan0_ip = get_interface_ip(WLAN_IFACE)
+
+    if cpu_temp is None:
+        temp_text = "T:--.-C"
     else:
-        if datetime.now().time().hour > 15 and datetime.now().time().hour < 16:
-            i2c_control.fan_speed_switch('fullspeed')
-            #i2c_control.fan_speed_switch('halfspeed')
-            fan_flag = True
+        temp_text = f"T:{cpu_temp:.1f}C"
 
-def process_check():
-    count=0
-    process = subprocess.Popen("ps aux | grep rpi_stats", shell=True, stdout=subprocess.PIPE)
-    stdout_list = process.communicate()[0].split('\n')
-    for s in stdout_list:
-        if "/home/luke/rpi_stats.py" in s:
-            count+=1
-    print("process_check", count)
-    if count > 2:
-        return True
-    return False
+    line1 = f"CPU:{cpu_usage:4.1f}% {temp_text}"
+    line2 = format_line(f"{ETH_IFACE}:", eth0_ip)
+    line3 = format_line(f"{WLAN_IFACE}:", wlan0_ip)
+    line4 = f"fan:{fan_state_label(fan_state)} mem:{ram_percent:.0f}%"
 
-if __name__ == '__main__':
-    if process_check():
-        print('process exist')
-        exit()
+    return (
+        line1,
+        line2,
+        line3,
+        line4,
+    )
 
-    global oled, i2c_control
-    oled = oled_control()
-    i2c_control = i2c_control()
-    fan_flag = True
-    #i2c_control.fan_speed_switch('close')
-    #i2c_control.fan_speed_switch('halfspeed')
-    #exit()
 
-    while True:
-       loop_check()
+def update_fan(board, current_state, desired_state):
+    if desired_state != current_state:
+        board.fan_speed_switch(desired_state)
+        time.sleep(HARDWARE_DELAY)
+        return desired_state
+    return current_state
+
+
+def main():
+    oled = None
+    board = None
+    fan_state = None
+
+    try:
+        oled = oled_control()
+        board = i2c_control()
+        time.sleep(HARDWARE_DELAY)
+        while True:
+            cpu_usage = get_cpu_usage()
+            cpu_temp = get_cpu_temperature()
+            desired_fan_state = select_fan_speed(cpu_temp)
+            fan_state = update_fan(board, fan_state, desired_fan_state)
+            print(cpu_usage, cpu_temp, desired_fan_state, fan_state)
+
+            str_list = build_display_lines(cpu_usage, cpu_temp, fan_state)
+            oled.draw_4line_string(str_list)
+            oled.output_disp()
+            time.sleep(HARDWARE_DELAY)
+
+            time.sleep(LOOP_INTERVAL)
+    except KeyboardInterrupt:
+        pass
+    finally:
+        if board is not None:
+            try:
+                board.fan_speed_switch("close")
+            except Exception:
+                pass
+            try:
+                board.i2c_close()
+            except Exception:
+                pass
+
+
+if __name__ == "__main__":
+    main()

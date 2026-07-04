@@ -23,7 +23,7 @@
         }
     },
     "rgb_animate": {
-        "reg_rgb_mode": {
+        "rgb_mode": {
             "reg": 4,
             "value": {
                 "running": 0,
