@@ -1,5 +1,6 @@
 # rpi-eboard
 This project is control rgb-cooling-hat of yahboom with pyhton code.
+This package is intended to support the Yahboom YB-EPV02 VER1.1 expansion board.
 
 ## Requirements
 
